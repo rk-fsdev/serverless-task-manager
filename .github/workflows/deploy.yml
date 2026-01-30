@@ -1,0 +1,299 @@
+name: Deploy Serverless Application
+
+on:
+  push:
+    branches:
+      - master
+      - main
+  pull_request:
+    branches:
+      - master
+      - main
+
+env:
+  NODE_VERSION: "18"
+  AWS_REGION: us-east-1
+
+jobs:
+  test:
+    name: Test Backend
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: "npm"
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install backend dependencies
+        run: |
+          cd backend
+          npm ci
+
+      - name: Run linting
+        run: |
+          cd backend
+          npm run lint
+
+      - name: Run tests
+        run: |
+          cd backend
+          npm test
+
+  deploy-dev:
+    name: Deploy to Development
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main'
+
+    environment:
+      name: development
+      url: ${{ steps.deploy.outputs.api-url }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: "npm"
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install backend dependencies
+        run: |
+          cd backend
+          npm ci
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Deploy to development
+        id: deploy
+        run: |
+          cd backend
+          npx serverless deploy --stage dev --verbose
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+      - name: Get deployment outputs
+        id: outputs
+        run: |
+          cd backend
+          echo "api-url=$(npx serverless info --stage dev | grep 'endpoint:' | cut -d' ' -f2)" >> $GITHUB_OUTPUT
+          echo "user-pool-id=$(npx serverless info --stage dev | grep 'UserPoolId:' | cut -d' ' -f2)" >> $GITHUB_OUTPUT
+          echo "user-pool-client-id=$(npx serverless info --stage dev | grep 'UserPoolClientId:' | cut -d' ' -f2)" >> $GITHUB_OUTPUT
+          echo "cloudfront-domain=$(npx serverless info --stage dev | grep 'CloudFrontDomainName:' | cut -d' ' -f2)" >> $GITHUB_OUTPUT
+
+      - name: Comment deployment info
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number
+            });
+
+            const botComment = comments.find(comment => 
+              comment.user.type === 'Bot' && comment.body.includes('🚀 Development Deployment')
+            );
+
+            const body = `
+            🚀 Development Deployment Complete!
+
+            **API Endpoint:** ${{ steps.outputs.outputs.api-url }}
+            **User Pool ID:** ${{ steps.outputs.outputs.user-pool-id }}
+            **User Pool Client ID:** ${{ steps.outputs.outputs.user-pool-client-id }}
+            **CloudFront Domain:** ${{ steps.outputs.outputs.cloudfront-domain }}
+
+            **Commit:** \`${{ github.sha }}\`
+            **Branch:** \`${{ github.ref_name }}\`
+            `;
+
+            if (botComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: botComment.id,
+                body
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body
+              });
+            }
+
+  deploy-prod:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: [test, deploy-dev]
+    if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main'
+
+    environment:
+      name: production
+      url: ${{ steps.deploy.outputs.api-url }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: "npm"
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install backend dependencies
+        run: |
+          cd backend
+          npm ci
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID_PROD }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY_PROD }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Deploy to production
+        id: deploy
+        run: |
+          cd backend
+          npx serverless deploy --stage prod --verbose
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID_PROD }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY_PROD }}
+
+      - name: Get deployment outputs
+        id: outputs
+        run: |
+          cd backend
+          echo "api-url=$(npx serverless info --stage prod | grep 'endpoint:' | cut -d' ' -f2)" >> $GITHUB_OUTPUT
+          echo "user-pool-id=$(npx serverless info --stage prod | grep 'UserPoolId:' | cut -d' ' -f2)" >> $GITHUB_OUTPUT
+          echo "user-pool-client-id=$(npx serverless info --stage prod | grep 'UserPoolClientId:' | cut -d' ' -f2)" >> $GITHUB_OUTPUT
+          echo "cloudfront-domain=$(npx serverless info --stage prod | grep 'CloudFrontDomainName:' | cut -d' ' -f2)" >> $GITHUB_OUTPUT
+
+      - name: Comment deployment info
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number
+            });
+
+            const botComment = comments.find(comment => 
+              comment.user.type === 'Bot' && comment.body.includes('🚀 Production Deployment')
+            );
+
+            const body = `
+            🚀 Production Deployment Complete!
+
+            **API Endpoint:** ${{ steps.outputs.outputs.api-url }}
+            **User Pool ID:** ${{ steps.outputs.outputs.user-pool-id }}
+            **User Pool Client ID:** ${{ steps.outputs.outputs.user-pool-client-id }}
+            **CloudFront Domain:** ${{ steps.outputs.outputs.cloudfront-domain }}
+
+            **Commit:** \`${{ github.sha }}\`
+            **Branch:** \`${{ github.ref_name }}\`
+            `;
+
+            if (botComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: botComment.id,
+                body
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body
+              });
+            }
+
+  deploy-frontend:
+    name: Deploy Frontend
+    runs-on: ubuntu-latest
+    needs: [deploy-dev, deploy-prod]
+    if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: |
+          cd frontend
+          npm ci
+
+      - name: Build frontend
+        run: |
+          cd frontend
+          npm run build
+        env:
+          REACT_APP_API_URL: ${{ needs.deploy-prod.outputs.api-url }}
+          REACT_APP_USER_POOL_ID: ${{ needs.deploy-prod.outputs.user-pool-id }}
+          REACT_APP_USER_POOL_CLIENT_ID: ${{ needs.deploy-prod.outputs.user-pool-client-id }}
+          REACT_APP_AWS_REGION: ${{ env.AWS_REGION }}
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID_PROD }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY_PROD }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Deploy to S3
+        run: |
+          aws s3 sync frontend/build/ s3://${{ secrets.S3_BUCKET_NAME }} --delete
+
+      - name: Invalidate CloudFront
+        run: |
+          aws cloudfront create-invalidation --distribution-id ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }} --paths "/*"
+
+      - name: Comment frontend deployment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = `
+            🎨 Frontend Deployment Complete!
+
+            **Frontend URL:** https://${{ needs.deploy-prod.outputs.cloudfront-domain }}
+
+            **Commit:** \`${{ github.sha }}\`
+            **Branch:** \`${{ github.ref_name }}\`
+            `;
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body
+            });

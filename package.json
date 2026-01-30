@@ -1,0 +1,29 @@
+{
+  "name": "serverless-task-manager",
+  "version": "1.0.0",
+  "description": "Full-stack serverless task management application with React frontend",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "install-backend": "cd backend && npm install",
+    "install-frontend": "cd frontend && npm install",
+    "install-all": "npm run install-backend && npm run install-frontend",
+    "deploy-dev": "cd backend && serverless deploy --stage dev",
+    "deploy-prod": "cd backend && serverless deploy --stage prod",
+    "build-frontend": "cd frontend && npm run build",
+    "start-frontend": "cd frontend && npm start"
+  },
+  "keywords": [
+    "serverless",
+    "aws",
+    "react",
+    "dynamodb",
+    "cognito",
+    "task-management"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
